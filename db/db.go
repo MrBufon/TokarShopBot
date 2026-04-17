@@ -1,10 +1,11 @@
 package db
 
 import (
-	"TokarTgBot/models"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/MrBufon/TokarShopBot/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

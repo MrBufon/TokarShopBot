@@ -1,10 +1,11 @@
 package main
 
 import (
-	"TokarTgBot/db"
-	"TokarTgBot/handlers"
 	"log"
 	"os"
+
+	"github.com/MrBufon/TokarShopBot/db"
+	"github.com/MrBufon/TokarShopBot/handlers"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"

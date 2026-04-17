@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"TokarTgBot/db"
-	"TokarTgBot/models"
+	"github.com/MrBufon/TokarShopBot/db"
+	"github.com/MrBufon/TokarShopBot/models"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
