@@ -11,7 +11,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-var good models.Good
+var UserGoods = make(map[int64]models.Good)
 
 var UserStates = make(map[int64]models.UserState, 128)
 
@@ -53,21 +53,24 @@ func HandleAdd(message *tgbotapi.Message) tgbotapi.MessageConfig {
 		state := UserStates[message.Chat.ID]
 		state.Phase = 1
 		UserStates[message.Chat.ID] = state
-		good.Name = message.Text
+		UserGoods[message.Chat.ID] = models.Good{Name: message.Text}
 		return tgbotapi.NewMessage(message.Chat.ID, "Добавляем товар. Шаг 2:\nВведите количество товара")
 	case 1:
 		amount, err := strconv.ParseInt(message.Text, 10, 64)
 		if err != nil {
 			return tgbotapi.NewMessage(message.Chat.ID, "Введенное значение не является целым числом. Пожалуйста, введите новое значение")
 		}
+		good := UserGoods[message.Chat.ID]
 		good.Amount = amount
 		if err := db.InsertIntoGoods(good); err != nil {
 			return tgbotapi.NewMessage(message.Chat.ID, "Возникла ошибка. Пожалуйста, введите количество товара снова либо попробуйте начать заного")
 		}
 		delete(UserStates, message.Chat.ID)
+		delete(UserGoods, message.Chat.ID)
 		return tgbotapi.NewMessage(message.Chat.ID, "Товар успешно добавлен")
 	default:
 		delete(UserStates, message.Chat.ID)
+		delete(UserGoods, message.Chat.ID)
 		return tgbotapi.NewMessage(message.Chat.ID, "Возникла ошибка. Попробуйте снова")
 	}
 }
@@ -112,6 +115,12 @@ func HandleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message) tgbotapi.Mes
 			messageConfig.ReplyMarkup = CommonStartKeyboard
 			return messageConfig
 		}
+	case message.Text == "/cancel":
+		if _, ok := UserStates[message.Chat.ID]; ok {
+			delete(UserStates, message.Chat.ID)
+			return tgbotapi.NewMessage(message.Chat.ID, "Операция завершена досрочно")
+		}
+		return tgbotapi.NewMessage(message.Chat.ID, "Вы не находились в процессе выполнения операции")
 	case UserStates[message.Chat.ID].State == "adding":
 		return HandleAdd(message)
 	case UserStates[message.Chat.ID].State == "deleting":
@@ -126,7 +135,7 @@ func HandleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message) tgbotapi.Mes
 func HandleQuery(bot *tgbotapi.BotAPI, cQuery *tgbotapi.CallbackQuery) tgbotapi.MessageConfig {
 	switch cQuery.Data {
 	case "add":
-		good = models.Good{}
+		delete(UserGoods, cQuery.Message.Chat.ID)
 		UserStates[cQuery.Message.Chat.ID] = models.UserState{State: "adding"}
 		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
 		if err != nil {
@@ -134,7 +143,7 @@ func HandleQuery(bot *tgbotapi.BotAPI, cQuery *tgbotapi.CallbackQuery) tgbotapi.
 		}
 		return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Добавляем товар. Шаг 1:\nВведите название товара")
 	case "delete":
-		good = models.Good{}
+		delete(UserGoods, cQuery.Message.Chat.ID)
 		UserStates[cQuery.Message.Chat.ID] = models.UserState{State: "deleting"}
 		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
 		if err != nil {
@@ -142,7 +151,7 @@ func HandleQuery(bot *tgbotapi.BotAPI, cQuery *tgbotapi.CallbackQuery) tgbotapi.
 		}
 		return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Удаляем товары. Введите порядковый номер товара")
 	case "find":
-		good = models.Good{}
+		delete(UserGoods, cQuery.Message.Chat.ID)
 		UserStates[cQuery.Message.Chat.ID] = models.UserState{State: "finding"}
 		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
 		if err != nil {
