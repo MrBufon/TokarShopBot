@@ -37,16 +37,28 @@ func main() {
 		log.Fatal(err)
 	}
 
+	const workerCount = 5
+
+	updatesCh := make(chan tgbotapi.Update, 100) // буфер можно подобрать
+
+	for range workerCount {
+		go func() {
+			for update := range updatesCh {
+				if update.Message == nil && update.CallbackQuery == nil {
+					continue
+				}
+
+				bot.Send(handlers.HandleUpdate(bot, update))
+			}
+		}()
+	}
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
 	updates := bot.GetUpdatesChan(u)
 
 	for update := range updates {
-		if update.Message == nil && update.CallbackQuery == nil {
-			continue
-		}
-
-		bot.Send(handlers.HandleUpdate(bot, update))
+		updatesCh <- update
 	}
 }
