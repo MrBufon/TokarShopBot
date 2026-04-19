@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/MrBufon/TokarShopBot/models"
+	"github.com/MrBufon/TokarShopBot/collections"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -21,8 +21,8 @@ func Init() error {
 	return err
 }
 
-func FillPermissionMap(UserRights map[int64]string) error {
-	var rows []models.UserRight
+func FillPermissionMap(UserRights *collections.MutexMap[int64, string]) error {
+	var rows []collections.UserRight
 
 	err := DB.Table("user_rights").Select("id, permission").Find(&rows).Error
 	if err != nil {
@@ -30,22 +30,32 @@ func FillPermissionMap(UserRights map[int64]string) error {
 	}
 
 	for _, r := range rows {
-		UserRights[r.ID] = r.Permission
+		UserRights.Set(r.ID, r.Permission)
 	}
 
 	return nil
 }
 
-func InsertIntoGoods(good models.Good) error {
+func InsertIntoGoods(good collections.Good) error {
 	return DB.Create(&good).Error
 }
 
 func DeleteFromGoods(order int64) error {
-	return DB.Where("id = ?", order).Delete(&models.Good{}).Error
+	result := DB.Where("id = ?", order).Delete(&collections.Good{})
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("товар с id %d не найден", order)
+	}
+
+	return nil
 }
 
 func FindInGoods(name string) (string, error) {
-	var goods []models.Good
+	var goods []collections.Good
 
 	switch name {
 	case "Всё":

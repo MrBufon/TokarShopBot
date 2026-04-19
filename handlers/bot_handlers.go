@@ -5,17 +5,17 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MrBufon/TokarShopBot/collections"
 	"github.com/MrBufon/TokarShopBot/db"
-	"github.com/MrBufon/TokarShopBot/models"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-var UserGoods = make(map[int64]models.Good)
+var UserGoods = collections.NewMutexMap[int64, collections.Good]()
 
-var UserStates = make(map[int64]models.UserState, 128)
+var UserStates = collections.NewMutexMap[int64, collections.UserState](128)
 
-var UserRights = make(map[int64]string)
+var UserRights = collections.NewMutexMap[int64, string]()
 
 var CommonStartKeyboard = tgbotapi.NewInlineKeyboardMarkup(
 	tgbotapi.NewInlineKeyboardRow(
@@ -33,12 +33,24 @@ var AdminStartKeyboard = tgbotapi.NewInlineKeyboardMarkup(
 	),
 )
 
+var BackKeyboard = tgbotapi.NewInlineKeyboardMarkup(
+	tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("Назад", "back"),
+	),
+)
+
+var StopFindKeyboard = tgbotapi.NewInlineKeyboardMarkup(
+	tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("Прекратить поиск", "stopFind"),
+	),
+)
+
 func InitUserRights() error {
 	return db.FillPermissionMap(UserRights)
 }
 
 func IsAdmin(id int64) bool {
-	right, ok := UserRights[id]
+	right, ok := UserRights.Get(id)
 	if ok && right == "admin" {
 		return true
 	}
@@ -46,31 +58,41 @@ func IsAdmin(id int64) bool {
 }
 
 func HandleAdd(message *tgbotapi.Message) tgbotapi.MessageConfig {
-	phase := UserStates[message.Chat.ID].Phase
+	userState, _ := UserStates.Get(message.Chat.ID)
+	phase := userState.Phase
 
 	switch phase {
 	case 0:
-		state := UserStates[message.Chat.ID]
+		state, _ := UserStates.Get(message.Chat.ID)
 		state.Phase = 1
-		UserStates[message.Chat.ID] = state
-		UserGoods[message.Chat.ID] = models.Good{Name: message.Text}
+		UserStates.Set(message.Chat.ID, state)
+		UserGoods.Set(message.Chat.ID, collections.Good{Name: message.Text})
 		return tgbotapi.NewMessage(message.Chat.ID, "Добавляем товар. Шаг 2:\nВведите количество товара")
 	case 1:
 		amount, err := strconv.ParseInt(message.Text, 10, 64)
 		if err != nil {
 			return tgbotapi.NewMessage(message.Chat.ID, "Введенное значение не является целым числом. Пожалуйста, введите новое значение")
 		}
-		good := UserGoods[message.Chat.ID]
+		good, _ := UserGoods.Get(message.Chat.ID)
 		good.Amount = amount
 		if err := db.InsertIntoGoods(good); err != nil {
 			return tgbotapi.NewMessage(message.Chat.ID, "Возникла ошибка. Пожалуйста, введите количество товара снова либо попробуйте начать заного")
 		}
-		delete(UserStates, message.Chat.ID)
-		delete(UserGoods, message.Chat.ID)
-		return tgbotapi.NewMessage(message.Chat.ID, "Товар успешно добавлен")
+
+		UserStates.Delete(message.Chat.ID)
+		UserGoods.Delete(message.Chat.ID)
+
+		msg := tgbotapi.NewMessage(message.Chat.ID, "Товар успешно добавлен")
+		if IsAdmin(message.Chat.ID) {
+			msg.ReplyMarkup = AdminStartKeyboard
+		} else {
+			msg.ReplyMarkup = CommonStartKeyboard
+		}
+
+		return msg
 	default:
-		delete(UserStates, message.Chat.ID)
-		delete(UserGoods, message.Chat.ID)
+		UserStates.Delete(message.Chat.ID)
+		UserGoods.Delete(message.Chat.ID)
 		return tgbotapi.NewMessage(message.Chat.ID, "Возникла ошибка. Попробуйте снова")
 	}
 }
@@ -85,25 +107,41 @@ func HandleDelete(message *tgbotapi.Message) tgbotapi.MessageConfig {
 		return tgbotapi.NewMessage(message.Chat.ID, "Возникла ошибка. Возможно, товара не существует. Пожалуйста, введите новое значение")
 	}
 
-	delete(UserStates, message.Chat.ID)
-	return tgbotapi.NewMessage(message.Chat.ID, "Товар успешно удалён")
+	UserStates.Delete(message.Chat.ID)
+
+	msg := tgbotapi.NewMessage(message.Chat.ID, "Товар успешно удалён")
+	if IsAdmin(message.Chat.ID) {
+		msg.ReplyMarkup = AdminStartKeyboard
+	} else {
+		msg.ReplyMarkup = CommonStartKeyboard
+	}
+
+	return msg
 }
 
 func HandleFind(message *tgbotapi.Message) tgbotapi.MessageConfig {
-	goods, err := db.FindInGoods(message.Text)
+	goodsStr, err := db.FindInGoods(message.Text)
+	msg := tgbotapi.NewMessage(message.Chat.ID, "")
+	msg.ReplyMarkup = StopFindKeyboard
+
 	if err != nil {
-		return tgbotapi.NewMessage(message.Chat.ID, "Возникла ошибка. Пожалуйста, введите новое значение")
-	} else if len(goods) == 0 {
-		return tgbotapi.NewMessage(message.Chat.ID, "Товаров не найдено. Пожалуйста, введите новое значение")
+		msg.Text = "Возникла ошибка. Пожалуйста, введите новое значение"
+		return msg
+	} else if len(goodsStr) == 0 {
+		msg.Text = "Товаров не найдено. Пожалуйста, введите новое значение"
+		return msg
 	}
 
 	var sb strings.Builder
 	sb.WriteString("Найденные товары:\n")
-	sb.WriteString(goods)
-	return tgbotapi.NewMessage(message.Chat.ID, sb.String())
+	sb.WriteString(goodsStr)
+	msg.Text = sb.String()
+	return msg
 }
 
-func HandleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message) tgbotapi.MessageConfig {
+func HandleMessage(message *tgbotapi.Message) tgbotapi.MessageConfig {
+	userState, ok := UserStates.Get(message.Chat.ID)
+	state := userState.State
 	switch {
 	case message.Text == "/start":
 		if IsAdmin(message.Chat.ID) {
@@ -116,16 +154,17 @@ func HandleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message) tgbotapi.Mes
 			return messageConfig
 		}
 	case message.Text == "/cancel":
-		if _, ok := UserStates[message.Chat.ID]; ok {
-			delete(UserStates, message.Chat.ID)
+		if ok {
+			UserStates.Delete(message.Chat.ID)
+			UserGoods.Delete(message.Chat.ID)
 			return tgbotapi.NewMessage(message.Chat.ID, "Операция завершена досрочно")
 		}
-		return tgbotapi.NewMessage(message.Chat.ID, "Вы не находились в процессе выполнения операции")
-	case UserStates[message.Chat.ID].State == "adding":
+		return tgbotapi.NewMessage(message.Chat.ID, "Вы не находитесь в процессе выполнения операции")
+	case state == "adding":
 		return HandleAdd(message)
-	case UserStates[message.Chat.ID].State == "deleting":
+	case state == "deleting":
 		return HandleDelete(message)
-	case UserStates[message.Chat.ID].State == "finding":
+	case state == "finding":
 		return HandleFind(message)
 	default:
 		return tgbotapi.NewMessage(message.Chat.ID, "Неизвестная команда")
@@ -135,30 +174,75 @@ func HandleMessage(bot *tgbotapi.BotAPI, message *tgbotapi.Message) tgbotapi.Mes
 func HandleQuery(bot *tgbotapi.BotAPI, cQuery *tgbotapi.CallbackQuery) tgbotapi.MessageConfig {
 	switch cQuery.Data {
 	case "add":
-		delete(UserGoods, cQuery.Message.Chat.ID)
-		UserStates[cQuery.Message.Chat.ID] = models.UserState{State: "adding"}
+		if !IsAdmin(cQuery.Message.Chat.ID) {
+			return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Нет прав")
+		}
+
+		UserGoods.Delete(cQuery.Message.Chat.ID)
+		UserStates.Set(cQuery.Message.Chat.ID, collections.UserState{State: "adding", Phase: 0})
 		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
 		if err != nil {
 			log.Println("callback error:", err)
 		}
 		return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Добавляем товар. Шаг 1:\nВведите название товара")
 	case "delete":
-		delete(UserGoods, cQuery.Message.Chat.ID)
-		UserStates[cQuery.Message.Chat.ID] = models.UserState{State: "deleting"}
+		if !IsAdmin(cQuery.Message.Chat.ID) {
+			return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Нет прав")
+		}
+
+		UserGoods.Delete(cQuery.Message.Chat.ID)
+		UserStates.Set(cQuery.Message.Chat.ID, collections.UserState{State: "deleting", Phase: 0})
 		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
 		if err != nil {
 			log.Println("callback error:", err)
 		}
 		return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Удаляем товары. Введите порядковый номер товара")
 	case "find":
-		delete(UserGoods, cQuery.Message.Chat.ID)
-		UserStates[cQuery.Message.Chat.ID] = models.UserState{State: "finding"}
+		UserGoods.Delete(cQuery.Message.Chat.ID)
+		UserStates.Set(cQuery.Message.Chat.ID, collections.UserState{State: "finding", Phase: 0})
 		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
 		if err != nil {
 			log.Println("callback error:", err)
 		}
-		return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Ищем товары. Введите название товара")
+
+		msg := tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Ищем товары. Введите название товара")
+		msg.ReplyMarkup = StopFindKeyboard
+		return msg
+	case "back":
+		return tgbotapi.NewMessage(cQuery.Message.Chat.ID, "Неизвестная команда")
+	case "stopFind":
+		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
+		if err != nil {
+			log.Println("callback error:", err)
+		}
+
+		msg := tgbotapi.NewMessage(cQuery.Message.Chat.ID, "")
+
+		if userState, ok := UserStates.Get(cQuery.Message.Chat.ID); ok {
+			if userState.State != "finding" {
+				msg.Text = "Вы находитесь в процессе выполнения другой операции"
+				return msg
+			}
+			UserStates.Delete(cQuery.Message.Chat.ID)
+
+			if IsAdmin(cQuery.Message.Chat.ID) {
+				msg.ReplyMarkup = AdminStartKeyboard
+			} else {
+				msg.ReplyMarkup = CommonStartKeyboard
+			}
+			msg.Text = "Операция поиска завершена"
+			return msg
+		}
+
+		if IsAdmin(cQuery.Message.Chat.ID) {
+			msg.ReplyMarkup = AdminStartKeyboard
+		} else {
+			msg.ReplyMarkup = CommonStartKeyboard
+		}
+		msg.Text = "Вы не находитесь в процессе выполнения операции"
+		return msg
 	default:
+		UserStates.Delete(cQuery.Message.Chat.ID)
 		_, err := bot.Request(tgbotapi.NewCallback(cQuery.ID, ""))
 		if err != nil {
 			log.Println("callback error:", err)
@@ -172,10 +256,10 @@ func HandleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) tgbotapi.Message
 	cQuery := update.CallbackQuery
 
 	if message != nil {
-		return HandleMessage(bot, message)
+		return HandleMessage(message)
 	} else if cQuery != nil {
 		return HandleQuery(bot, cQuery)
 	}
 
-	return tgbotapi.NewMessage(update.Message.Chat.ID, "Вообще белиберда какая-то")
+	return tgbotapi.NewMessage(0, "Неизвестный тип update")
 }

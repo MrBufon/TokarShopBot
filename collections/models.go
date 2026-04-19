@@ -1,4 +1,4 @@
-package models
+package collections
 
 type Good struct {
 	Id     int64  `gorm:"primaryKey"`

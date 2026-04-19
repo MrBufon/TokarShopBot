@@ -39,7 +39,7 @@ func main() {
 
 	const workerCount = 5
 
-	updatesCh := make(chan tgbotapi.Update, 100) // буфер можно подобрать
+	updatesCh := make(chan tgbotapi.Update, 100)
 
 	for range workerCount {
 		go func() {
