@@ -80,3 +80,44 @@ func FindInGoods(name string) (string, error) {
 	}
 	return sb.String(), nil
 }
+
+func FindGoodStrInGoodsById(id int64) (string, error) {
+	var good collections.Good
+
+	err := DB.Where("id = ?", id).First(&good).Error
+
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Номер: %d | Наименование: %s | Количество: %d\n", good.Id, good.Name, good.Amount), nil
+}
+
+func FindGoodInGoodsById(id int64) (collections.Good, error) {
+	var good collections.Good
+
+	err := DB.Where("id = ?", id).First(&good).Error
+
+	if err != nil {
+		return collections.Good{}, err
+	}
+
+	return good, nil
+}
+
+func EditInGoods(updated collections.Good) error {
+	result := DB.Model(&collections.Good{}).
+		Where("id = ?", updated.Id).
+		Select("amount", "name").
+		Updates(updated)
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("товар не найден")
+	}
+
+	return nil
+}
